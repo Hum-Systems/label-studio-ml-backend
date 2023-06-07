@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 from segment_anything import sam_model_registry, SamPredictor
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_converter import brush
@@ -6,13 +5,11 @@ from label_studio_ml.utils import get_image_local_path
 import numpy as np
 import cv2
 import os
-from PIL import Image
 import string
 import random
+import boto3
 
 import onnxruntime
-from onnxruntime.quantization import QuantType
-from onnxruntime.quantization.quantize import quantize_dynamic
 
 
 VITH_CHECKPOINT = os.environ.get("VITH_CHECKPOINT", "sam_vit_h_4b8939.pth")
@@ -23,7 +20,7 @@ def load_my_model():
         Loads the Segment Anything model on initializing Label studio, so if you call it outside MyModel it doesn't load every time you try to make a prediction
         Returns the predictor object. For more, look at Facebook's SAM docs
         """
-        device = "cuda"     # if you're not using CUDA, use "cpu" instead .... good luck not burning your computer lol
+        device = "cuda" if os.environ.get("CUDA") else "cpu"
         
         sam = sam_model_registry["vit_h"](VITH_CHECKPOINT)        # Note: YOU MUST HAVE THE MODEL SAVED IN THE SAME DIRECTORY AS YOUR BACKEND
         sam.to(device=device)
@@ -32,8 +29,8 @@ def load_my_model():
         return predictor
 
 PREDICTOR = load_my_model()
-PREV_IMG_PATH = ""
-PREV_IMG = 0
+PREV_TASK_IMAGE_PATH = ""
+PREV_IMAGE = 0
 IMAGE_EMBEDDING = 0
 previous_id = 0
 
@@ -60,7 +57,6 @@ class MyModel(LabelStudioMLBase):
         predictions = []
         predictor = PREDICTOR
 
-        image_url = tasks[0]['data']['image']
         print(f"the kwargs are {kwargs}")
         print(f"the tasks are {tasks}")
 
@@ -76,7 +72,6 @@ class MyModel(LabelStudioMLBase):
         if smart_annotation == "rectanglelabels":
             box_width = kwargs['context']['result'][0]['value']['width'] * width / 100
             box_height = kwargs['context']['result'][0]['value']['height'] * height / 100
-            rectanglelabel = kwargs['context']['result'][0]['value']['rectanglelabels'][0]
             label = kwargs['context']['result'][0]['value']['rectanglelabels'][0]
             print(f"the label is {label}")
 
@@ -98,32 +93,45 @@ class MyModel(LabelStudioMLBase):
         
 
         task = tasks[0]
-        img_path = task["data"]["image"]
+        task_image_path = task["data"]["image"]
 
-        # loading the image you are annotating
-        image_path = get_image_local_path(img_path)
+        # if task_img_path points to s3, download the file and let local_image_path point the local file
+        if task_image_path.startswith("s3://"):
+            task_image_path = '/'.join(task_image_path.split('/')[3:])
+            
+            s3 = boto3.resource(
+                "s3",
+                aws_access_key_id=os.environ.get("S3_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("S3_SECRET_ACCESS_KEY"),
+                endpoint_url=os.environ.get("S3_ENDPOINT_URL"),
+            )
+            bucket = s3.Bucket(os.environ.get("S3_BUCKET_NAME"))
+            local_image_path = "/image.jpg"
+            bucket.download_file(task_image_path, local_image_path)
+        else:
+            local_image_path = get_image_local_path(task_image_path)
 
 
         # this is to speed up inference after the first time you selected an image
-        global PREV_IMG_PATH
-        global PREV_IMG
+        global PREV_TASK_IMAGE_PATH
+        global PREV_IMAGE
         global IMAGE_EMBEDDING
         global onnx_has_mask_input
         global onnx_mask_input
         global previous_id
 
-        if image_path != PREV_IMG_PATH:
-            PREV_IMG_PATH = image_path
-            image = cv2.imread(image_path)
+        if task_image_path != PREV_TASK_IMAGE_PATH:
+            PREV_TASK_IMAGE_PATH = task_image_path
+            image = cv2.imread(local_image_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            PREV_IMG = image
+            PREV_IMAGE = image
             # retrieving predictions from SAM. For more info, look at Facebook's SAM docs
             predictor.set_image(image)
 
             image_embedding = predictor.get_image_embedding()
             IMAGE_EMBEDDING = image_embedding.cpu().numpy()
-        elif image_path == PREV_IMG_PATH:
-            image = PREV_IMG
+        else:
+            image = PREV_IMAGE
             image_embedding = IMAGE_EMBEDDING
 
         # for bounding boxes

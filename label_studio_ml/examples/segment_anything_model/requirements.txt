@@ -25,4 +25,5 @@ werkzeug==2.0.2
 redis<4.6.0
 rq<1.14
 onnx==1.13.1
+boto3==1.16.63
 opencv-contrib-python-headless

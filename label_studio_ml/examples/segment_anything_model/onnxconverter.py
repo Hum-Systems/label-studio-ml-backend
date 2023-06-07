@@ -1,9 +1,8 @@
 import warnings
 from segment_anything.utils.onnx import SamOnnxModel
-from segment_anything import sam_model_registry, SamPredictor
+from segment_anything import sam_model_registry
 import torch
 import os
-import onnxruntime
 from onnxruntime.quantization import QuantType
 from onnxruntime.quantization.quantize import quantize_dynamic
 
@@ -20,6 +19,10 @@ dynamic_axes = {
     "point_labels": {1: "num_points"},
 }
 
+image_width = 640 if os.environ.get("IMAGE_WIDTH") is None else int(os.environ.get("IMAGE_WIDTH"))
+image_height = 480 if os.environ.get("IMAGE_HEIGHT") is None else int(os.environ.get("IMAGE_HEIGHT"))
+print(f"Image width: {image_width}, image height: {image_height}")
+
 embed_dim = sam.prompt_encoder.embed_dim
 embed_size = sam.prompt_encoder.image_embedding_size
 mask_input_size = [4 * x for x in embed_size]
@@ -29,7 +32,7 @@ dummy_inputs = {
     "point_labels": torch.randint(low=0, high=4, size=(1, 5), dtype=torch.float),
     "mask_input": torch.randn(1, 1, *mask_input_size, dtype=torch.float),
     "has_mask_input": torch.tensor([1], dtype=torch.float),
-    "orig_im_size": torch.tensor([1500, 2250], dtype=torch.float),
+    "orig_im_size": torch.tensor([image_height, image_width], dtype=torch.float),
 }
 output_names = ["masks", "iou_predictions", "low_res_masks"]
 
